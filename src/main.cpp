@@ -16,11 +16,14 @@ int main(int argc, char** argv) {
     try {
         const cv::Mat image = imgproc::loadImage(argv[1]);
         const cv::Mat gray = imgproc::toGrayscale(image);
+        const cv::Mat edges = imgproc::detectEdges(gray);
 
         fs::create_directories(outDir);
         const std::string stem = fs::path(argv[1]).stem().string();
         imgproc::saveImage((fs::path(outDir) / (stem + "_gray.png")).string(), gray);
-        std::cout << "Saved " << stem << "_gray.png (" << image.cols << "x" << image.rows << ")\n";
+        imgproc::saveImage((fs::path(outDir) / (stem + "_edges.png")).string(), edges);
+        std::cout << "Saved " << stem << "_gray.png and " << stem << "_edges.png ("
+                  << image.cols << "x" << image.rows << ")\n";
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << '\n';
         return 1;
