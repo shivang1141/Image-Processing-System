@@ -42,7 +42,9 @@ cv::Mat detectEdges(const cv::Mat& gray, const EdgeParams& params) {
 
     cv::Mat source = gray;
     if (params.blurKernel > 0) {
-        cv::GaussianBlur(gray, source, cv::Size(params.blurKernel, params.blurKernel), 0);
+        // Kernel must be odd; round up if needed.
+        int k = params.blurKernel | 1;
+        cv::GaussianBlur(gray, source, cv::Size(k, k), 0);
     }
 
     cv::Mat edges;
