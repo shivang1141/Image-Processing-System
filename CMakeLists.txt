@@ -14,6 +14,7 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
 # Core processing library shared by the app and the tests.
 add_library(imgproc_core
     src/processor.cpp
+    src/benchmark.cpp
 )
 target_include_directories(imgproc_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(imgproc_core PUBLIC ${OpenCV_LIBS})

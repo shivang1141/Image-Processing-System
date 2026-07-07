@@ -1,3 +1,4 @@
+#include "benchmark.hpp"
 #include "processor.hpp"
 
 #include <opencv2/core.hpp>
@@ -20,6 +21,8 @@ void printUsage(const char* prog) {
         "Usage:\n"
         "  " << prog << " process  <image>  [-o outdir] [canny options]\n"
         "      Grayscale + Canny on one image; saves <name>_gray.png / <name>_edges.png.\n\n"
+        "  " << prog << " batch    <folder> [-o outdir] [--csv file] [canny options]\n"
+        "      Process every image in a folder and report per-image and average times.\n\n"
         "Canny options:\n"
         "  --low T     low threshold  (default 50)\n"
         "  --high T    high threshold (default 150)\n"
@@ -30,6 +33,7 @@ void printUsage(const char* prog) {
 struct Options {
     std::vector<std::string> positional;
     std::string outDir = "output";
+    std::string csvPath;
     int threads = -1;
     EdgeParams edge;
 };
@@ -46,6 +50,7 @@ Options parseArgs(int argc, char** argv, int start) {
         };
 
         if (arg == "-o" || arg == "--output") opt.outDir = next();
+        else if (arg == "--csv") opt.csvPath = next();
         else if (arg == "--threads") opt.threads = std::stoi(next());
         else if (arg == "--low") opt.edge.lowThreshold = std::stod(next());
         else if (arg == "--high") opt.edge.highThreshold = std::stod(next());
@@ -74,6 +79,24 @@ int runProcess(const Options& opt) {
     return 0;
 }
 
+int runBatch(const Options& opt) {
+    if (opt.positional.size() != 1) {
+        throw std::invalid_argument("batch: expected exactly one folder path");
+    }
+    const BatchReport report = processFolder(opt.positional[0], opt.outDir, opt.edge);
+    if (report.results.empty() && report.failures.empty()) {
+        std::cerr << "No supported images found in " << opt.positional[0] << '\n';
+        return 1;
+    }
+
+    printBatchReport(std::cout, report);
+    if (!opt.csvPath.empty()) {
+        writeBatchCsv(opt.csvPath, report);
+        std::cout << "CSV written to " << opt.csvPath << '\n';
+    }
+    return report.failures.empty() ? 0 : 2;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -90,6 +113,7 @@ int main(int argc, char** argv) {
         }
 
         if (command == "process") return runProcess(opt);
+        if (command == "batch") return runBatch(opt);
 
         std::cerr << "Unknown command: " << command << "\n\n";
         printUsage(argv[0]);
