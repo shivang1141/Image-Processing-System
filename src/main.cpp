@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,11 @@ void printUsage(const char* prog) {
         "      Grayscale + Canny on one image; saves <name>_gray.png / <name>_edges.png.\n\n"
         "  " << prog << " batch    <folder> [-o outdir] [--csv file] [canny options]\n"
         "      Process every image in a folder and report per-image and average times.\n\n"
+        "  " << prog << " bench    [--sizes WxH,WxH,...] [--iterations N] [--image file]\n"
+        "                          [--csv file] [canny options]\n"
+        "      Benchmark grayscale + Canny across image sizes (synthetic image unless --image).\n\n"
+        "  " << prog << " generate <folder> [--count N] [--sizes WxH,...]\n"
+        "      Write synthetic sample images for trying out 'batch'.\n\n"
         "Canny options:\n"
         "  --low T     low threshold  (default 50)\n"
         "  --high T    high threshold (default 150)\n"
@@ -30,10 +36,33 @@ void printUsage(const char* prog) {
         "  --threads N OpenCV worker threads, 1 = single-threaded (default: OpenCV decides)\n";
 }
 
+std::vector<cv::Size> parseSizes(const std::string& text) {
+    std::vector<cv::Size> sizes;
+    std::stringstream ss(text);
+    std::string item;
+    while (std::getline(ss, item, ',')) {
+        const auto x = item.find_first_of("xX");
+        if (x == std::string::npos) {
+            throw std::invalid_argument("Bad size '" + item + "', expected WxH");
+        }
+        const int w = std::stoi(item.substr(0, x));
+        const int h = std::stoi(item.substr(x + 1));
+        if (w <= 0 || h <= 0) {
+            throw std::invalid_argument("Size must be positive: " + item);
+        }
+        sizes.emplace_back(w, h);
+    }
+    return sizes;
+}
+
 struct Options {
     std::vector<std::string> positional;
     std::string outDir = "output";
     std::string csvPath;
+    std::string imagePath;
+    std::vector<cv::Size> sizes = {{320, 240}, {640, 480}, {1280, 720}, {1920, 1080}, {3840, 2160}};
+    int iterations = 50;
+    int count = 10;
     int threads = -1;
     EdgeParams edge;
 };
@@ -51,6 +80,10 @@ Options parseArgs(int argc, char** argv, int start) {
 
         if (arg == "-o" || arg == "--output") opt.outDir = next();
         else if (arg == "--csv") opt.csvPath = next();
+        else if (arg == "--image") opt.imagePath = next();
+        else if (arg == "--sizes") opt.sizes = parseSizes(next());
+        else if (arg == "--iterations") opt.iterations = std::stoi(next());
+        else if (arg == "--count") opt.count = std::stoi(next());
         else if (arg == "--threads") opt.threads = std::stoi(next());
         else if (arg == "--low") opt.edge.lowThreshold = std::stod(next());
         else if (arg == "--high") opt.edge.highThreshold = std::stod(next());
@@ -97,6 +130,46 @@ int runBatch(const Options& opt) {
     return report.failures.empty() ? 0 : 2;
 }
 
+int runBench(const Options& opt) {
+    cv::Mat source;
+    if (!opt.imagePath.empty()) {
+        source = loadImage(opt.imagePath);
+        std::cout << "Source image: " << opt.imagePath << '\n';
+    } else {
+        std::cout << "Source image: synthetic\n";
+    }
+    std::cout << "OpenCV " << CV_VERSION << ", threads: " << cv::getNumThreads()
+              << ", Canny low/high: " << opt.edge.lowThreshold << '/' << opt.edge.highThreshold
+              << ", blur: " << opt.edge.blurKernel << "\n\n";
+
+    const auto results = benchmarkSizes(opt.sizes, opt.iterations, source, opt.edge);
+    printSizeBenchmark(std::cout, results);
+    if (!opt.csvPath.empty()) {
+        writeSizeBenchmarkCsv(opt.csvPath, results);
+        std::cout << "CSV written to " << opt.csvPath << '\n';
+    }
+    return 0;
+}
+
+int runGenerate(const Options& opt) {
+    if (opt.positional.size() != 1) {
+        throw std::invalid_argument("generate: expected exactly one output folder");
+    }
+    const fs::path dir(opt.positional[0]);
+    fs::create_directories(dir);
+
+    for (int i = 0; i < opt.count; ++i) {
+        const cv::Size size = opt.sizes[static_cast<size_t>(i) % opt.sizes.size()];
+        std::ostringstream name;
+        name << "sample_" << std::setw(3) << std::setfill('0') << i << '_'
+             << size.width << 'x' << size.height << ".png";
+        saveImage((dir / name.str()).string(),
+                  makeSyntheticImage(size.width, size.height, static_cast<unsigned>(i + 1)));
+    }
+    std::cout << "Wrote " << opt.count << " images to " << fs::absolute(dir).string() << '\n';
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -114,6 +187,8 @@ int main(int argc, char** argv) {
 
         if (command == "process") return runProcess(opt);
         if (command == "batch") return runBatch(opt);
+        if (command == "bench") return runBench(opt);
+        if (command == "generate") return runGenerate(opt);
 
         std::cerr << "Unknown command: " << command << "\n\n";
         printUsage(argv[0]);
