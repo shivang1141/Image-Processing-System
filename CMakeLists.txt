@@ -22,3 +22,8 @@ target_compile_options(imgproc_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(imgproc src/main.cpp)
 target_link_libraries(imgproc PRIVATE imgproc_core)
+
+enable_testing()
+add_executable(imgproc_tests tests/test_processor.cpp)
+target_link_libraries(imgproc_tests PRIVATE imgproc_core)
+add_test(NAME imgproc_tests COMMAND imgproc_tests)
