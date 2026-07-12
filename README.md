@@ -7,7 +7,7 @@ C++17 / OpenCV command-line tool for Linux. Loads images, converts them to grays
 ## Features
 
 - Load png / jpg / bmp / tiff / webp images
-- Grayscale conversion (BGR, BGRA, or alredy-gray input)
+- Grayscale conversion (BGR, BGRA, or already-gray input)
 - Canny edge detection with optional Gaussian blur first
 - Timing for load, grayscale, Canny and save
 - Batch mode for a whole folder, with averages and CSV export
