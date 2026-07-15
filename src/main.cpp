@@ -1,4 +1,5 @@
 #include "benchmark.hpp"
+#include "parse.hpp"
 #include "processor.hpp"
 
 #include <opencv2/core.hpp>
@@ -24,35 +25,17 @@ void printUsage(const char* prog) {
         "      Grayscale + Canny on one image; saves <name>_gray.png / <name>_edges.png.\n\n"
         "  " << prog << " batch    <folder> [-o outdir] [--csv file] [canny options]\n"
         "      Process every image in a folder and report per-image and average times.\n\n"
-        "  " << prog << " bench    [--sizes WxH,WxH,...] [--iterations N] [--image file]\n"
+        "  " << prog << " bench    [--sizes WxH,...] [--iterations N] [--image file]\n"
         "                          [--csv file] [canny options]\n"
         "      Benchmark grayscale + Canny across image sizes (synthetic image unless --image).\n\n"
         "  " << prog << " generate <folder> [--count N] [--sizes WxH,...]\n"
         "      Write synthetic sample images for trying out 'batch'.\n\n"
+        "Sizes are WxH or the presets small (640x480), medium (1920x1080), large (3840x2160).\n\n"
         "Canny options:\n"
-        "  --low T     low threshold  (default 50)\n"
-        "  --high T    high threshold (default 150)\n"
-        "  --blur K    Gaussian blur kernel before Canny, 0 = off (default 5)\n"
-        "  --threads N OpenCV worker threads, 1 = single-threaded (default: OpenCV decides)\n";
-}
-
-std::vector<cv::Size> parseSizes(const std::string& text) {
-    std::vector<cv::Size> sizes;
-    std::stringstream ss(text);
-    std::string item;
-    while (std::getline(ss, item, ',')) {
-        const auto x = item.find_first_of("xX");
-        if (x == std::string::npos) {
-            throw std::invalid_argument("Bad size '" + item + "', expected WxH");
-        }
-        const int w = std::stoi(item.substr(0, x));
-        const int h = std::stoi(item.substr(x + 1));
-        if (w <= 0 || h <= 0) {
-            throw std::invalid_argument("Size must be positive: " + item);
-        }
-        sizes.emplace_back(w, h);
-    }
-    return sizes;
+        "  --low T       low threshold  (default 50)\n"
+        "  --high T      high threshold (default 150)\n"
+        "  --blur K      Gaussian blur kernel before Canny, 0 = off (default 5)\n"
+        "  --threads N   OpenCV worker threads, 1 = single-threaded (default: OpenCV decides)\n";
 }
 
 struct Options {
@@ -64,6 +47,7 @@ struct Options {
     int iterations = 50;
     int count = 10;
     int threads = -1;
+    int workers = 1;
     EdgeParams edge;
 };
 
@@ -82,15 +66,17 @@ Options parseArgs(int argc, char** argv, int start) {
         else if (arg == "--csv") opt.csvPath = next();
         else if (arg == "--image") opt.imagePath = next();
         else if (arg == "--sizes") opt.sizes = parseSizes(next());
-        else if (arg == "--iterations") opt.iterations = std::stoi(next());
-        else if (arg == "--count") opt.count = std::stoi(next());
-        else if (arg == "--threads") opt.threads = std::stoi(next());
-        else if (arg == "--low") opt.edge.lowThreshold = std::stod(next());
-        else if (arg == "--high") opt.edge.highThreshold = std::stod(next());
-        else if (arg == "--blur") opt.edge.blurKernel = std::stoi(next());
+        else if (arg == "--iterations") opt.iterations = parseInt(next(), "--iterations");
+        else if (arg == "--count") opt.count = parseInt(next(), "--count");
+        else if (arg == "--threads") opt.threads = parseInt(next(), "--threads");
+        else if (arg == "--low") opt.edge.lowThreshold = parseDouble(next(), "--low");
+        else if (arg == "--high") opt.edge.highThreshold = parseDouble(next(), "--high");
+        else if (arg == "--blur") opt.edge.blurKernel = parseInt(next(), "--blur");
         else if (!arg.empty() && arg[0] == '-') throw std::invalid_argument("Unknown option: " + arg);
         else opt.positional.push_back(arg);
     }
+    if (opt.iterations < 1) throw std::invalid_argument("--iterations must be >= 1");
+    if (opt.count < 1) throw std::invalid_argument("--count must be >= 1");
     return opt;
 }
 
