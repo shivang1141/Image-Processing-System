@@ -11,8 +11,12 @@ struct EdgeParams {
     double lowThreshold = 50.0;
     double highThreshold = 150.0;
     int blurKernel = 5;   // Gaussian blur kernel size before Canny (0 disables blur)
-    int apertureSize = 3; // Sobel aperture used by Canny
+    int apertureSize = 3; // Sobel aperture used by Canny (3, 5 or 7)
 };
+
+// Throws std::invalid_argument if the parameters cannot be used by Canny
+// (negative thresholds or blur kernel, aperture not 3/5/7).
+void validateParams(const EdgeParams& params);
 
 // Wall-clock time spent in each stage of the pipeline, in milliseconds.
 struct StageTimings {
@@ -32,7 +36,12 @@ cv::Mat loadImage(const std::string& path);
 // Already-grayscale input is returned as a copy.
 cv::Mat toGrayscale(const cv::Mat& image);
 
-// Runs Canny edge detection on a grayscale image and returns a binary edge map.
+// Gaussian blur with a k x k kernel (even k is rounded up to the next odd size).
+// k == 0 returns the input unchanged.
+cv::Mat blurImage(const cv::Mat& gray, int kernel);
+
+// Runs Canny edge detection on an 8-bit grayscale image and returns a binary edge map.
+// Blurs first when params.blurKernel > 0.
 cv::Mat detectEdges(const cv::Mat& gray, const EdgeParams& params = {});
 
 // Saves an image to disk. Throws std::runtime_error on failure.
@@ -47,9 +56,11 @@ struct ProcessResult {
 };
 
 // Load -> grayscale -> edges -> save (grayscale and edge outputs) for one file.
-// Outputs are written to outputDir as <stem>_gray.png and <stem>_edges.png.
+// Outputs are written to outputDir as <outputStem>_gray.png and <outputStem>_edges.png;
+// an empty outputStem means the input file's stem.
 ProcessResult processFile(const std::string& inputPath,
                           const std::string& outputDir,
-                          const EdgeParams& params = {});
+                          const EdgeParams& params = {},
+                          const std::string& outputStem = "");
 
 } // namespace imgproc

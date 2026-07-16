@@ -35,6 +35,7 @@ void printUsage(const char* prog) {
         "  --low T       low threshold  (default 50)\n"
         "  --high T      high threshold (default 150)\n"
         "  --blur K      Gaussian blur kernel before Canny, 0 = off (default 5)\n"
+        "  --aperture A  Sobel aperture 3, 5 or 7 (default 3)\n"
         "  --threads N   OpenCV worker threads, 1 = single-threaded (default: OpenCV decides)\n";
 }
 
@@ -72,9 +73,11 @@ Options parseArgs(int argc, char** argv, int start) {
         else if (arg == "--low") opt.edge.lowThreshold = parseDouble(next(), "--low");
         else if (arg == "--high") opt.edge.highThreshold = parseDouble(next(), "--high");
         else if (arg == "--blur") opt.edge.blurKernel = parseInt(next(), "--blur");
+        else if (arg == "--aperture") opt.edge.apertureSize = parseInt(next(), "--aperture");
         else if (!arg.empty() && arg[0] == '-') throw std::invalid_argument("Unknown option: " + arg);
         else opt.positional.push_back(arg);
     }
+    validateParams(opt.edge);
     if (opt.iterations < 1) throw std::invalid_argument("--iterations must be >= 1");
     if (opt.count < 1) throw std::invalid_argument("--count must be >= 1");
     return opt;

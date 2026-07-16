@@ -11,10 +11,28 @@ namespace fs = std::filesystem;
 
 namespace imgproc {
 
+void validateParams(const EdgeParams& params) {
+    if (params.lowThreshold < 0.0 || params.highThreshold < 0.0) {
+        throw std::invalid_argument("Canny thresholds must be >= 0");
+    }
+    if (params.blurKernel < 0) {
+        throw std::invalid_argument("Blur kernel must be >= 0 (0 disables blur)");
+    }
+    if (params.apertureSize != 3 && params.apertureSize != 5 && params.apertureSize != 7) {
+        throw std::invalid_argument("Canny aperture must be 3, 5 or 7");
+    }
+}
+
 cv::Mat loadImage(const std::string& path) {
+    if (!fs::exists(path)) {
+        throw std::runtime_error("File not found: " + path);
+    }
+    if (!fs::is_regular_file(path)) {
+        throw std::runtime_error("Not a regular file: " + path);
+    }
     cv::Mat image = cv::imread(path, cv::IMREAD_COLOR);
     if (image.empty()) {
-        throw std::runtime_error("Failed to load image: " + path);
+        throw std::runtime_error("Failed to decode image (corrupt or unsupported format): " + path);
     }
     return image;
 }
@@ -35,32 +53,50 @@ cv::Mat toGrayscale(const cv::Mat& image) {
     return gray;
 }
 
-cv::Mat detectEdges(const cv::Mat& gray, const EdgeParams& params) {
-    if (gray.empty() || gray.channels() != 1) {
-        throw std::invalid_argument("detectEdges: expected a non-empty single-channel image");
+cv::Mat blurImage(const cv::Mat& gray, int kernel) {
+    if (kernel < 0) {
+        throw std::invalid_argument("blurImage: kernel must be >= 0");
     }
+    if (kernel == 0) {
+        return gray;
+    }
+    // Kernel must be odd; round up if needed.
+    const int k = kernel | 1;
+    cv::Mat blurred;
+    cv::GaussianBlur(gray, blurred, cv::Size(k, k), 0);
+    return blurred;
+}
 
-    cv::Mat source = gray;
-    if (params.blurKernel > 0) {
-        // Kernel must be odd; round up if needed.
-        int k = params.blurKernel | 1;
-        cv::GaussianBlur(gray, source, cv::Size(k, k), 0);
+cv::Mat detectEdges(const cv::Mat& gray, const EdgeParams& params) {
+    if (gray.empty() || gray.channels() != 1 || gray.depth() != CV_8U) {
+        throw std::invalid_argument("detectEdges: expected a non-empty 8-bit single-channel image");
     }
+    validateParams(params);
 
     cv::Mat edges;
-    cv::Canny(source, edges, params.lowThreshold, params.highThreshold, params.apertureSize);
+    cv::Canny(blurImage(gray, params.blurKernel), edges,
+              params.lowThreshold, params.highThreshold, params.apertureSize);
     return edges;
 }
 
 void saveImage(const std::string& path, const cv::Mat& image) {
-    if (!cv::imwrite(path, image)) {
+    bool ok = false;
+    try {
+        ok = cv::imwrite(path, image);
+    } catch (const cv::Exception& e) {
+        throw std::runtime_error("Failed to save image: " + path + " (" + e.what() + ")");
+    }
+    if (!ok) {
         throw std::runtime_error("Failed to save image: " + path);
     }
 }
 
 ProcessResult processFile(const std::string& inputPath,
                           const std::string& outputDir,
-                          const EdgeParams& params) {
+                          const EdgeParams& params,
+                          const std::string& outputStem) {
+    validateParams(params);
+
     ProcessResult result;
     result.inputPath = inputPath;
 
@@ -79,7 +115,7 @@ ProcessResult processFile(const std::string& inputPath,
     result.timings.edgeMs = timer.elapsedMs();
 
     fs::create_directories(outputDir);
-    const std::string stem = fs::path(inputPath).stem().string();
+    const std::string stem = outputStem.empty() ? fs::path(inputPath).stem().string() : outputStem;
     const fs::path out(outputDir);
 
     timer.reset();
