@@ -1,4 +1,5 @@
 #include "benchmark.hpp"
+#include "compare.hpp"
 #include "parse.hpp"
 #include "processor.hpp"
 
@@ -25,6 +26,10 @@ void printUsage(const char* prog) {
         "      Grayscale + Canny on one image; saves <name>_gray.png / <name>_edges.png.\n\n"
         "  " << prog << " batch    <folder> [-o outdir] [--csv file] [canny options]\n"
         "      Process every image in a folder and report per-image and average times.\n\n"
+        "  " << prog << " compare  [image]  [-o outdir] [--blurs K,...] [--lows T,...] [--highs T,...]\n"
+        "                          [--repeats N] [--csv file]\n"
+        "      Run every blur x low x high combination and save labelled contact sheets\n"
+        "      (synthetic 1280x720 image unless an image is given).\n\n"
         "  " << prog << " bench    [--sizes WxH,...] [--iterations N] [--image file]\n"
         "                          [--csv file] [canny options]\n"
         "      Benchmark grayscale + Canny across image sizes (synthetic image unless --image).\n\n"
@@ -49,6 +54,11 @@ struct Options {
     int count = 10;
     int threads = -1;
     int workers = 1;
+    int repeats = 3;
+    bool repeatsGiven = false;
+    std::vector<int> blurs = {0, 3, 5, 9};
+    std::vector<double> lows = {25, 50, 100};
+    std::vector<double> highs = {75, 150, 250};
     EdgeParams edge;
 };
 
@@ -70,6 +80,10 @@ Options parseArgs(int argc, char** argv, int start) {
         else if (arg == "--iterations") opt.iterations = parseInt(next(), "--iterations");
         else if (arg == "--count") opt.count = parseInt(next(), "--count");
         else if (arg == "--threads") opt.threads = parseInt(next(), "--threads");
+        else if (arg == "--repeats") { opt.repeats = parseInt(next(), "--repeats"); opt.repeatsGiven = true; }
+        else if (arg == "--blurs") opt.blurs = parseIntList(next(), "--blurs");
+        else if (arg == "--lows") opt.lows = parseDoubleList(next(), "--lows");
+        else if (arg == "--highs") opt.highs = parseDoubleList(next(), "--highs");
         else if (arg == "--low") opt.edge.lowThreshold = parseDouble(next(), "--low");
         else if (arg == "--high") opt.edge.highThreshold = parseDouble(next(), "--high");
         else if (arg == "--blur") opt.edge.blurKernel = parseInt(next(), "--blur");
@@ -80,6 +94,7 @@ Options parseArgs(int argc, char** argv, int start) {
     validateParams(opt.edge);
     if (opt.iterations < 1) throw std::invalid_argument("--iterations must be >= 1");
     if (opt.count < 1) throw std::invalid_argument("--count must be >= 1");
+    if (opt.repeats < 1) throw std::invalid_argument("--repeats must be >= 1");
     return opt;
 }
 
@@ -117,6 +132,41 @@ int runBatch(const Options& opt) {
         std::cout << "CSV written to " << opt.csvPath << '\n';
     }
     return report.failures.empty() ? 0 : 2;
+}
+
+int runCompare(const Options& opt) {
+    if (opt.positional.size() > 1) {
+        throw std::invalid_argument("compare: expected at most one image path");
+    }
+    const cv::Mat image = opt.positional.empty() ? makeSyntheticImage(1280, 720)
+                                                 : loadImage(opt.positional[0]);
+    const std::string name = opt.positional.empty() ? "synthetic"
+                                                    : fs::path(opt.positional[0]).stem().string();
+    std::cout << "Image: " << (opt.positional.empty() ? "synthetic 1280x720" : opt.positional[0])
+              << " (" << image.cols << "x" << image.rows << ")\n\n";
+
+    const auto grid = buildParamGrid(opt.blurs, opt.lows, opt.highs, opt.edge.apertureSize);
+    if (grid.empty()) {
+        throw std::invalid_argument("compare: no valid combinations (every --lows value is above every --highs value)");
+    }
+    const auto trials = compareParams(toGrayscale(image), grid, opt.repeatsGiven ? opt.repeats : 5);
+    printComparison(std::cout, trials);
+
+    const fs::path out(opt.outDir);
+    fs::create_directories(out);
+    const fs::path stages = out / (name + "_stages.png");
+    saveImage(stages.string(), makeStageStrip(image, opt.edge));
+    std::cout << "\nWrote " << stages.string() << '\n';
+    for (int blur : opt.blurs) {
+        const fs::path sheet = out / (name + "_sweep_blur" + std::to_string(blur) + ".png");
+        saveImage(sheet.string(), makeContactSheet(trials, blur, opt.lows, opt.highs));
+        std::cout << "Wrote " << sheet.string() << '\n';
+    }
+    if (!opt.csvPath.empty()) {
+        writeComparisonCsv(opt.csvPath, trials);
+        std::cout << "CSV written to " << opt.csvPath << '\n';
+    }
+    return 0;
 }
 
 int runBench(const Options& opt) {
@@ -176,6 +226,7 @@ int main(int argc, char** argv) {
 
         if (command == "process") return runProcess(opt);
         if (command == "batch") return runBatch(opt);
+        if (command == "compare") return runCompare(opt);
         if (command == "bench") return runBench(opt);
         if (command == "generate") return runGenerate(opt);
 
