@@ -172,7 +172,7 @@ cv::Mat makeContactSheet(const std::vector<ParamTrial>& trials,
 
     for (int c = 0; c < cols; ++c) {
         drawText(sheet, "high " + formatNumber(highs[c]),
-                 {rowHeader + c * cellW + 4, title + 22}, 0.6, kText, 2);
+                 {rowHeader + c * cellW + thumbSize.width / 2 - 40, title + 22}, 0.6, kText, 2);
     }
 
     for (int r = 0; r < rows; ++r) {
