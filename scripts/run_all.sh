@@ -15,6 +15,13 @@ ctest --test-dir "$BUILD" --output-on-failure
 mkdir -p "$RESULTS"
 APP="$BUILD/imgproc"
 
+echo; echo "=== Parameter comparison ==="
+"$APP" compare -o "$RESULTS/compare" --csv "$RESULTS/compare_synthetic.csv" | tee "$RESULTS/compare_synthetic.txt"
+if [[ -f "$ROOT/data/building.jpg" ]]; then
+    "$APP" compare "$ROOT/data/building.jpg" -o "$RESULTS/compare" --csv "$RESULTS/compare_building.csv" \
+        | tee "$RESULTS/compare_building.txt"
+fi
+
 echo; echo "=== Generating sample images ==="
 "$APP" generate "$ROOT/samples" --count 12 --sizes 640x480,1280x720,1920x1080
 
