@@ -10,6 +10,7 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs)
+find_package(Threads REQUIRED)
 
 # Core processing library shared by the app and the tests.
 add_library(imgproc_core
@@ -19,7 +20,7 @@ add_library(imgproc_core
     src/parse.cpp
 )
 target_include_directories(imgproc_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(imgproc_core PUBLIC ${OpenCV_LIBS})
+target_link_libraries(imgproc_core PUBLIC ${OpenCV_LIBS} Threads::Threads)
 target_compile_options(imgproc_core PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(imgproc src/main.cpp)

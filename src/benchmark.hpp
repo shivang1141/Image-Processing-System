@@ -13,20 +13,29 @@ namespace imgproc {
 // ---------- Folder (batch) processing ----------
 
 struct BatchReport {
-    std::vector<ProcessResult> results;
-    std::vector<std::string> failures; // "path: reason"
+    std::vector<ProcessResult> results;  // in sorted file order, whatever the worker count
+    std::vector<std::string> failures;   // "path: reason"
+    int workers = 1;
+    double wallMs = 0.0;                 // elapsed time for the whole folder
 
     StageTimings average() const;
+    double imagesPerSecond() const;
 };
 
 // True for file extensions OpenCV can typically decode (.png, .jpg, .bmp, ...).
 bool isSupportedImage(const std::string& path);
 
+// Number of worker threads to use when the caller asks for `requested` (0 = one per CPU core).
+int resolveWorkers(int requested);
+
 // Processes every supported image in inputDir (non-recursive, sorted by name).
-// Files that fail to load are recorded in BatchReport::failures and skipped.
+// With workers > 1 independent images are processed concurrently on a pool of
+// std::threads (0 = one per CPU core). Files that fail to load are recorded in
+// BatchReport::failures and skipped.
 BatchReport processFolder(const std::string& inputDir,
                           const std::string& outputDir,
-                          const EdgeParams& params = {});
+                          const EdgeParams& params = {},
+                          int workers = 1);
 
 void printBatchReport(std::ostream& os, const BatchReport& report);
 void writeBatchCsv(const std::string& path, const BatchReport& report);
@@ -38,6 +47,8 @@ struct Stats {
     double minMs = 0.0;
     double maxMs = 0.0;
 };
+
+Stats computeStats(const std::vector<double>& samples);
 
 struct SizeBenchmarkResult {
     int width = 0;

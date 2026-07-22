@@ -24,8 +24,9 @@ void printUsage(const char* prog) {
         "Usage:\n"
         "  " << prog << " process  <image>  [-o outdir] [canny options]\n"
         "      Grayscale + Canny on one image; saves <name>_gray.png / <name>_edges.png.\n\n"
-        "  " << prog << " batch    <folder> [-o outdir] [--csv file] [canny options]\n"
-        "      Process every image in a folder and report per-image and average times.\n\n"
+        "  " << prog << " batch    <folder> [-o outdir] [--csv file] [--workers N] [canny options]\n"
+        "      Process every image in a folder and report per-image and average times.\n"
+        "      --workers N processes N images at once (0 = one per CPU core, default 1).\n\n"
         "  " << prog << " compare  [image]  [-o outdir] [--blurs K,...] [--lows T,...] [--highs T,...]\n"
         "                          [--repeats N] [--csv file]\n"
         "      Run every blur x low x high combination and save labelled contact sheets\n"
@@ -54,6 +55,7 @@ struct Options {
     int count = 10;
     int threads = -1;
     int workers = 1;
+    std::string workerList; // images processed at once (default 1)
     int repeats = 3;
     bool repeatsGiven = false;
     std::vector<int> blurs = {0, 3, 5, 9};
@@ -80,6 +82,7 @@ Options parseArgs(int argc, char** argv, int start) {
         else if (arg == "--iterations") opt.iterations = parseInt(next(), "--iterations");
         else if (arg == "--count") opt.count = parseInt(next(), "--count");
         else if (arg == "--threads") opt.threads = parseInt(next(), "--threads");
+        else if (arg == "--workers") opt.workerList = next();
         else if (arg == "--repeats") { opt.repeats = parseInt(next(), "--repeats"); opt.repeatsGiven = true; }
         else if (arg == "--blurs") opt.blurs = parseIntList(next(), "--blurs");
         else if (arg == "--lows") opt.lows = parseDoubleList(next(), "--lows");
@@ -120,7 +123,15 @@ int runBatch(const Options& opt) {
     if (opt.positional.size() != 1) {
         throw std::invalid_argument("batch: expected exactly one folder path");
     }
-    const BatchReport report = processFolder(opt.positional[0], opt.outDir, opt.edge);
+    const int workers =
+        opt.workerList.empty() ? 1 : resolveWorkers(parseInt(opt.workerList, "--workers"));
+    // Several images at once, each also using OpenCV's thread pool, oversubscribes the
+    // CPU. Keep OpenCV single-threaded per image unless --threads says otherwise.
+    if (workers > 1 && opt.threads < 0) {
+        cv::setNumThreads(1);
+    }
+
+    const BatchReport report = processFolder(opt.positional[0], opt.outDir, opt.edge, workers);
     if (report.results.empty() && report.failures.empty()) {
         std::cerr << "No supported images found in " << opt.positional[0] << '\n';
         return 1;

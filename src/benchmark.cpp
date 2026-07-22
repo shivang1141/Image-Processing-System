@@ -4,18 +4,72 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <optional>
 #include <ostream>
 #include <stdexcept>
+#include <thread>
 
 namespace fs = std::filesystem;
 
 namespace imgproc {
 
 namespace {
+
+std::ofstream openCsv(const std::string& path) {
+    std::ofstream out(path);
+    if (!out) {
+        throw std::runtime_error("Failed to open CSV for writing: " + path);
+    }
+    out << std::fixed << std::setprecision(4);
+    return out;
+}
+
+std::string lowerExtension(const fs::path& path) {
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext;
+}
+
+// Calls fn(0) .. fn(count - 1), spread over `workers` threads that each pull the
+// next index from a shared counter. fn must not throw.
+template <typename Fn>
+void runParallel(size_t count, int workers, Fn&& fn) {
+    if (workers <= 1 || count <= 1) {
+        for (size_t i = 0; i < count; ++i) {
+            fn(i);
+        }
+        return;
+    }
+
+    std::atomic<size_t> next{0};
+    auto worker = [&] {
+        for (size_t i = next.fetch_add(1); i < count; i = next.fetch_add(1)) {
+            fn(i);
+        }
+    };
+
+    std::vector<std::thread> pool;
+    const size_t threads = std::min(count, static_cast<size_t>(workers));
+    pool.reserve(threads);
+    for (size_t t = 0; t < threads; ++t) {
+        pool.emplace_back(worker);
+    }
+    for (auto& t : pool) {
+        t.join();
+    }
+}
+
+std::string sizeLabel(int width, int height) {
+    return std::to_string(width) + "x" + std::to_string(height);
+}
+
+} // namespace
 
 Stats computeStats(const std::vector<double>& samples) {
     Stats s;
@@ -31,17 +85,6 @@ Stats computeStats(const std::vector<double>& samples) {
     s.maxMs = *std::max_element(samples.begin(), samples.end());
     return s;
 }
-
-std::ofstream openCsv(const std::string& path) {
-    std::ofstream out(path);
-    if (!out) {
-        throw std::runtime_error("Failed to open CSV for writing: " + path);
-    }
-    out << std::fixed << std::setprecision(4);
-    return out;
-}
-
-} // namespace
 
 // ---------- Folder (batch) processing ----------
 
@@ -64,22 +107,36 @@ StageTimings BatchReport::average() const {
     return avg;
 }
 
+double BatchReport::imagesPerSecond() const {
+    return wallMs > 0.0 ? 1000.0 * static_cast<double>(results.size()) / wallMs : 0.0;
+}
+
 bool isSupportedImage(const std::string& path) {
     static const std::vector<std::string> kExtensions = {
         ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp", ".ppm", ".pgm"};
 
-    std::string ext = fs::path(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string ext = lowerExtension(path);
     return std::find(kExtensions.begin(), kExtensions.end(), ext) != kExtensions.end();
+}
+
+int resolveWorkers(int requested) {
+    if (requested < 0) {
+        throw std::invalid_argument("Worker count must be >= 0 (0 = one per CPU core)");
+    }
+    if (requested == 0) {
+        return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    }
+    return requested;
 }
 
 BatchReport processFolder(const std::string& inputDir,
                           const std::string& outputDir,
-                          const EdgeParams& params) {
+                          const EdgeParams& params,
+                          int workers) {
     if (!fs::is_directory(inputDir)) {
         throw std::runtime_error("Not a directory: " + inputDir);
     }
+    validateParams(params);
 
     std::vector<fs::path> files;
     for (const auto& entry : fs::directory_iterator(inputDir)) {
@@ -90,11 +147,33 @@ BatchReport processFolder(const std::string& inputDir,
     std::sort(files.begin(), files.end());
 
     BatchReport report;
-    for (const auto& file : files) {
+    report.workers = resolveWorkers(workers);
+    if (files.empty()) {
+        return report;
+    }
+    fs::create_directories(outputDir);
+
+    // Warm-up so the first image does not pay for OpenCV's lazy initialisation.
+    detectEdges(toGrayscale(makeSyntheticImage(64, 48)), params);
+
+    std::vector<std::optional<ProcessResult>> results(files.size());
+    std::vector<std::string> errors(files.size());
+
+    Timer wall;
+    runParallel(files.size(), report.workers, [&](size_t i) {
         try {
-            report.results.push_back(processFile(file.string(), outputDir, params));
+            results[i] = processFile(files[i].string(), outputDir, params);
         } catch (const std::exception& e) {
-            report.failures.push_back(file.string() + ": " + e.what());
+            errors[i] = files[i].string() + ": " + e.what();
+        }
+    });
+    report.wallMs = wall.elapsedMs();
+
+    for (size_t i = 0; i < files.size(); ++i) {
+        if (results[i]) {
+            report.results.push_back(std::move(*results[i]));
+        } else {
+            report.failures.push_back(errors[i]);
         }
     }
     return report;
@@ -116,9 +195,8 @@ void printBatchReport(std::ostream& os, const BatchReport& report) {
         if (name.size() > 30) {
             name = name.substr(0, 27) + "...";
         }
-        const std::string size = std::to_string(r.width) + "x" + std::to_string(r.height);
         os << std::left << std::setw(32) << name << std::right
-           << std::setw(12) << size
+           << std::setw(12) << sizeLabel(r.width, r.height)
            << std::setw(10) << r.timings.loadMs
            << std::setw(10) << r.timings.grayscaleMs
            << std::setw(10) << r.timings.edgeMs
@@ -136,6 +214,9 @@ void printBatchReport(std::ostream& os, const BatchReport& report) {
        << std::setw(10) << avg.saveMs
        << std::setw(10) << avg.totalMs() << '\n';
     os << "Average processing time (grayscale + Canny): " << avg.processingMs() << " ms\n";
+    os << "Wall time: " << report.wallMs << " ms with " << report.workers << " worker(s), "
+       << std::setprecision(1) << report.imagesPerSecond() << " images/s\n"
+       << std::setprecision(3);
 
     if (!report.failures.empty()) {
         os << "\nFailed (" << report.failures.size() << "):\n";
@@ -253,9 +334,8 @@ void printSizeBenchmark(std::ostream& os, const std::vector<SizeBenchmarkResult>
     os << std::string(99, '-') << '\n';
 
     for (const auto& r : results) {
-        const std::string size = std::to_string(r.width) + "x" + std::to_string(r.height);
         const double mp = static_cast<double>(r.width) * r.height / 1e6;
-        os << std::left << std::setw(14) << size << std::right
+        os << std::left << std::setw(14) << sizeLabel(r.width, r.height) << std::right
            << std::setw(12) << mp
            << std::setw(8) << r.iterations
            << std::setw(12) << r.grayscale.meanMs
