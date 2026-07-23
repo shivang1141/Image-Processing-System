@@ -31,7 +31,8 @@ int resolveWorkers(int requested);
 // Processes every supported image in inputDir (non-recursive, sorted by name).
 // With workers > 1 independent images are processed concurrently on a pool of
 // std::threads (0 = one per CPU core). Files that fail to load are recorded in
-// BatchReport::failures and skipped.
+// BatchReport::failures and skipped. Files sharing a stem (a.png, a.jpg) get
+// distinct output names (a_png_*, a_jpg_*) so no output is overwritten.
 BatchReport processFolder(const std::string& inputDir,
                           const std::string& outputDir,
                           const EdgeParams& params = {},

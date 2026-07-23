@@ -9,8 +9,10 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <map>
 #include <optional>
 #include <ostream>
+#include <set>
 #include <stdexcept>
 #include <thread>
 
@@ -63,6 +65,34 @@ void runParallel(size_t count, int workers, Fn&& fn) {
     for (auto& t : pool) {
         t.join();
     }
+}
+
+// Output stem for each file; files sharing a stem get their extension appended.
+std::vector<std::string> outputStems(const std::vector<fs::path>& files) {
+    std::map<std::string, int> stemCount;
+    for (const auto& f : files) {
+        ++stemCount[f.stem().string()];
+    }
+
+    std::set<std::string> used;
+    std::vector<std::string> stems;
+    stems.reserve(files.size());
+    for (const auto& f : files) {
+        std::string base = f.stem().string();
+        if (stemCount[base] > 1) {
+            std::string ext = lowerExtension(f);
+            if (!ext.empty()) {
+                base += "_" + ext.substr(1);
+            }
+        }
+        std::string name = base;
+        for (int k = 2; used.count(name) != 0; ++k) {
+            name = base + "_" + std::to_string(k);
+        }
+        used.insert(name);
+        stems.push_back(name);
+    }
+    return stems;
 }
 
 std::string sizeLabel(int width, int height) {
@@ -145,6 +175,7 @@ BatchReport processFolder(const std::string& inputDir,
         }
     }
     std::sort(files.begin(), files.end());
+    const std::vector<std::string> stems = outputStems(files);
 
     BatchReport report;
     report.workers = resolveWorkers(workers);
@@ -162,7 +193,7 @@ BatchReport processFolder(const std::string& inputDir,
     Timer wall;
     runParallel(files.size(), report.workers, [&](size_t i) {
         try {
-            results[i] = processFile(files[i].string(), outputDir, params);
+            results[i] = processFile(files[i].string(), outputDir, params, stems[i]);
         } catch (const std::exception& e) {
             errors[i] = files[i].string() + ": " + e.what();
         }
