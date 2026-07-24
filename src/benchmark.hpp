@@ -73,4 +73,39 @@ std::vector<SizeBenchmarkResult> benchmarkSizes(const std::vector<cv::Size>& siz
 void printSizeBenchmark(std::ostream& os, const std::vector<SizeBenchmarkResult>& results);
 void writeSizeBenchmarkCsv(const std::string& path, const std::vector<SizeBenchmarkResult>& results);
 
+// ---------- Sequential vs parallel scaling benchmark ----------
+
+struct ScalingRun {
+    std::string mode;      // "sequential", "sequential + OpenCV threads", "parallel"
+    int workers = 1;       // images processed at the same time
+    int opencvThreads = 1; // threads OpenCV may use inside each image (0 = OpenCV default)
+    Stats wall;            // wall time for the whole set of images
+    double imagesPerSecond = 0.0;
+    double speedup = 1.0;  // relative to the plain sequential run
+};
+
+struct ScalingResult {
+    int width = 0;
+    int height = 0;
+    int images = 0;
+    std::vector<ScalingRun> runs;
+};
+
+// For each size, writes `imagesPerSize` images to a temporary folder and runs the
+// full load -> gray -> Canny -> save pipeline over them with:
+//   1. one image at a time, OpenCV single-threaded      (sequential baseline)
+//   2. one image at a time, OpenCV's own threading      (library-level parallelism)
+//   3. N images at a time, OpenCV single-threaded, for each N in workerCounts > 1
+// Each mode gets one untimed warm-up run and `repeats` timed runs.
+// OpenCV's global thread setting is restored afterwards.
+std::vector<ScalingResult> benchmarkScaling(const std::vector<cv::Size>& sizes,
+                                            int imagesPerSize,
+                                            const std::vector<int>& workerCounts,
+                                            int repeats,
+                                            const cv::Mat& source = cv::Mat(),
+                                            const EdgeParams& params = {});
+
+void printScaling(std::ostream& os, const std::vector<ScalingResult>& results);
+void writeScalingCsv(const std::string& path, const std::vector<ScalingResult>& results);
+
 } // namespace imgproc

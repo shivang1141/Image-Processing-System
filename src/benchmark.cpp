@@ -1,6 +1,7 @@
 #include "benchmark.hpp"
 #include "timer.hpp"
 
+#include <opencv2/core/utility.hpp>
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
@@ -11,8 +12,10 @@
 #include <iomanip>
 #include <map>
 #include <optional>
+#include <random>
 #include <ostream>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <thread>
 
@@ -389,6 +392,146 @@ void writeSizeBenchmarkCsv(const std::string& path, const std::vector<SizeBenchm
             << r.grayscale.meanMs << ',' << r.grayscale.minMs << ',' << r.grayscale.maxMs << ','
             << r.edges.meanMs << ',' << r.edges.minMs << ',' << r.edges.maxMs << ','
             << (r.grayscale.meanMs + r.edges.meanMs) << '\n';
+    }
+}
+
+// ---------- Sequential vs parallel scaling benchmark ----------
+
+std::vector<ScalingResult> benchmarkScaling(const std::vector<cv::Size>& sizes,
+                                            int imagesPerSize,
+                                            const std::vector<int>& workerCounts,
+                                            int repeats,
+                                            const cv::Mat& source,
+                                            const EdgeParams& params) {
+    if (imagesPerSize < 1) {
+        throw std::invalid_argument("benchmarkScaling: imagesPerSize must be >= 1");
+    }
+    if (repeats < 1) {
+        throw std::invalid_argument("benchmarkScaling: repeats must be >= 1");
+    }
+    for (int w : workerCounts) {
+        if (w < 1) {
+            throw std::invalid_argument("benchmarkScaling: worker counts must be >= 1");
+        }
+    }
+    validateParams(params);
+
+    // Scratch folder for the generated inputs and outputs; always cleaned up, and
+    // OpenCV's thread setting is put back, even if a run throws.
+    struct Cleanup {
+        int threads;
+        fs::path root;
+        ~Cleanup() {
+            cv::setNumThreads(threads);
+            std::error_code ec;
+            fs::remove_all(root, ec);
+        }
+    } cleanup{cv::getNumThreads(),
+              fs::temp_directory_path() / ("imgproc_scaling_" + std::to_string(std::random_device{}()))};
+
+    const fs::path inputDir = cleanup.root / "input";
+    const fs::path outputDir = cleanup.root / "output";
+
+    std::vector<ScalingResult> results;
+    for (const auto& size : sizes) {
+        fs::remove_all(cleanup.root);
+        fs::create_directories(inputDir);
+
+        cv::Mat resized;
+        if (!source.empty()) {
+            cv::resize(source, resized, size, 0, 0, cv::INTER_AREA);
+        }
+        for (int i = 0; i < imagesPerSize; ++i) {
+            std::ostringstream name;
+            name << "img_" << std::setw(3) << std::setfill('0') << i << ".png";
+            saveImage((inputDir / name.str()).string(),
+                      source.empty() ? makeSyntheticImage(size.width, size.height, static_cast<unsigned>(i + 1))
+                                     : resized);
+        }
+
+        // OpenCV thread count: 1 = single-threaded, -1 = reset to OpenCV's default.
+        std::vector<std::pair<ScalingRun, int>> plan = {
+            {{"sequential", 1, 1, {}, 0.0, 1.0}, 1},
+            {{"sequential + OpenCV threads", 1, 0, {}, 0.0, 1.0}, -1},
+        };
+        for (int w : workerCounts) {
+            if (w > 1) {
+                plan.push_back({{"parallel", w, 1, {}, 0.0, 1.0}, 1});
+            }
+        }
+
+        ScalingResult result;
+        result.width = size.width;
+        result.height = size.height;
+        result.images = imagesPerSize;
+
+        for (auto& [run, cvThreads] : plan) {
+            cv::setNumThreads(cvThreads);
+            run.opencvThreads = cv::getNumThreads();
+
+            processFolder(inputDir.string(), outputDir.string(), params, run.workers); // warm-up
+            std::vector<double> wallTimes;
+            for (int r = 0; r < repeats; ++r) {
+                const BatchReport report =
+                    processFolder(inputDir.string(), outputDir.string(), params, run.workers);
+                if (!report.failures.empty()) {
+                    throw std::runtime_error("benchmarkScaling: " + report.failures.front());
+                }
+                wallTimes.push_back(report.wallMs);
+            }
+            run.wall = computeStats(wallTimes);
+            run.imagesPerSecond = 1000.0 * imagesPerSize / run.wall.meanMs;
+            result.runs.push_back(run);
+        }
+
+        const double baseline = result.runs.front().wall.meanMs;
+        for (auto& run : result.runs) {
+            run.speedup = baseline / run.wall.meanMs;
+        }
+        results.push_back(std::move(result));
+    }
+    return results;
+}
+
+void printScaling(std::ostream& os, const std::vector<ScalingResult>& results) {
+    os << std::fixed;
+    for (const auto& res : results) {
+        os << "\n" << sizeLabel(res.width, res.height) << "  ("
+           << std::setprecision(2) << static_cast<double>(res.width) * res.height / 1e6
+           << " MP), " << res.images << " images, load -> gray -> Canny -> save\n";
+        os << std::left << std::setw(30) << "Mode" << std::right
+           << std::setw(9) << "Workers"
+           << std::setw(12) << "CV threads"
+           << std::setw(13) << "Wall mean"
+           << std::setw(12) << "Wall min"
+           << std::setw(11) << "Images/s"
+           << std::setw(10) << "Speedup" << '\n';
+        os << std::string(97, '-') << '\n';
+        for (const auto& run : res.runs) {
+            os << std::left << std::setw(30) << run.mode << std::right
+               << std::setw(9) << run.workers
+               << std::setw(12) << run.opencvThreads
+               << std::setprecision(1)
+               << std::setw(10) << run.wall.meanMs << " ms"
+               << std::setw(9) << run.wall.minMs << " ms"
+               << std::setw(11) << run.imagesPerSecond
+               << std::setprecision(2)
+               << std::setw(9) << run.speedup << "x\n";
+        }
+    }
+}
+
+void writeScalingCsv(const std::string& path, const std::vector<ScalingResult>& results) {
+    std::ofstream out = openCsv(path);
+    out << "width,height,images,mode,workers,opencv_threads,"
+           "wall_mean_ms,wall_min_ms,wall_max_ms,images_per_sec,speedup\n";
+    for (const auto& res : results) {
+        for (const auto& run : res.runs) {
+            out << res.width << ',' << res.height << ',' << res.images << ','
+                << run.mode << ',' << run.workers << ',' << run.opencvThreads << ','
+                << run.wall.meanMs << ',' << run.wall.minMs << ',' << run.wall.maxMs << ','
+                << run.imagesPerSecond << ',' << run.speedup << '\n';
+        }
     }
 }
 

@@ -11,7 +11,9 @@
 #include <iomanip>
 #include <iostream>
 #include <sstream>
+#include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -34,6 +36,9 @@ void printUsage(const char* prog) {
         "  " << prog << " bench    [--sizes WxH,...] [--iterations N] [--image file]\n"
         "                          [--csv file] [canny options]\n"
         "      Benchmark grayscale + Canny across image sizes (synthetic image unless --image).\n\n"
+        "  " << prog << " scale    [--sizes small,medium,large] [--images N] [--workers 1,2,4,...]\n"
+        "                          [--repeats N] [--image file] [--csv file] [canny options]\n"
+        "      Compare sequential processing with N images processed concurrently.\n\n"
         "  " << prog << " generate <folder> [--count N] [--sizes WxH,...]\n"
         "      Write synthetic sample images for trying out 'batch'.\n\n"
         "Sizes are WxH or the presets small (640x480), medium (1920x1080), large (3840x2160).\n\n"
@@ -51,11 +56,13 @@ struct Options {
     std::string csvPath;
     std::string imagePath;
     std::vector<cv::Size> sizes = {{320, 240}, {640, 480}, {1280, 720}, {1920, 1080}, {3840, 2160}};
+    bool sizesGiven = false;
     int iterations = 50;
     int count = 10;
     int threads = -1;
     int workers = 1;
-    std::string workerList; // images processed at once (default 1)
+    std::string workerList; // batch: one count (default 1); scale: a list (default 1,2,4,8,all cores)
+    int images = 16;
     int repeats = 3;
     bool repeatsGiven = false;
     std::vector<int> blurs = {0, 3, 5, 9};
@@ -78,11 +85,12 @@ Options parseArgs(int argc, char** argv, int start) {
         if (arg == "-o" || arg == "--output") opt.outDir = next();
         else if (arg == "--csv") opt.csvPath = next();
         else if (arg == "--image") opt.imagePath = next();
-        else if (arg == "--sizes") opt.sizes = parseSizes(next());
+        else if (arg == "--sizes") { opt.sizes = parseSizes(next()); opt.sizesGiven = true; }
         else if (arg == "--iterations") opt.iterations = parseInt(next(), "--iterations");
         else if (arg == "--count") opt.count = parseInt(next(), "--count");
         else if (arg == "--threads") opt.threads = parseInt(next(), "--threads");
         else if (arg == "--workers") opt.workerList = next();
+        else if (arg == "--images") opt.images = parseInt(next(), "--images");
         else if (arg == "--repeats") { opt.repeats = parseInt(next(), "--repeats"); opt.repeatsGiven = true; }
         else if (arg == "--blurs") opt.blurs = parseIntList(next(), "--blurs");
         else if (arg == "--lows") opt.lows = parseDoubleList(next(), "--lows");
@@ -97,6 +105,7 @@ Options parseArgs(int argc, char** argv, int start) {
     validateParams(opt.edge);
     if (opt.iterations < 1) throw std::invalid_argument("--iterations must be >= 1");
     if (opt.count < 1) throw std::invalid_argument("--count must be >= 1");
+    if (opt.images < 1) throw std::invalid_argument("--images must be >= 1");
     if (opt.repeats < 1) throw std::invalid_argument("--repeats must be >= 1");
     return opt;
 }
@@ -201,6 +210,33 @@ int runBench(const Options& opt) {
     return 0;
 }
 
+int runScale(const Options& opt) {
+    cv::Mat source;
+    if (!opt.imagePath.empty()) {
+        source = loadImage(opt.imagePath);
+    }
+    const std::vector<cv::Size> sizes =
+        opt.sizesGiven ? opt.sizes
+                       : std::vector<cv::Size>{sizePreset("small"), sizePreset("medium"), sizePreset("large")};
+    std::set<int> unique;
+    for (int w : parseIntList(opt.workerList.empty() ? "1,2,4,8,0" : opt.workerList, "--workers")) {
+        unique.insert(resolveWorkers(w));
+    }
+    const std::vector<int> workers(unique.begin(), unique.end());
+
+    std::cout << "OpenCV " << CV_VERSION << ", CPU threads: " << std::thread::hardware_concurrency()
+              << ", source: " << (source.empty() ? "synthetic" : opt.imagePath)
+              << ", repeats: " << opt.repeats << '\n';
+
+    const auto results = benchmarkScaling(sizes, opt.images, workers, opt.repeats, source, opt.edge);
+    printScaling(std::cout, results);
+    if (!opt.csvPath.empty()) {
+        writeScalingCsv(opt.csvPath, results);
+        std::cout << "\nCSV written to " << opt.csvPath << '\n';
+    }
+    return 0;
+}
+
 int runGenerate(const Options& opt) {
     if (opt.positional.size() != 1) {
         throw std::invalid_argument("generate: expected exactly one output folder");
@@ -239,6 +275,7 @@ int main(int argc, char** argv) {
         if (command == "batch") return runBatch(opt);
         if (command == "compare") return runCompare(opt);
         if (command == "bench") return runBench(opt);
+        if (command == "scale") return runScale(opt);
         if (command == "generate") return runGenerate(opt);
 
         std::cerr << "Unknown command: " << command << "\n\n";
