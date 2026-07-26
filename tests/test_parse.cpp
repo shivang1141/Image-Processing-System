@@ -22,7 +22,7 @@ TEST(ParseSizes, AcceptsPresetsMixedWithSizes) {
 }
 
 TEST(ParseSizes, RejectsMalformedInput) {
-    for (const char* bad : {"", "640x", "x480", "640x480x2", "axb", "0x480", "-5x10", "huge"}) {
+    for (const char* bad : {"", "640x", "x480", "640x480x2", "axb", "0x480", "-5x10", "huge", "640x480,"}) {
         EXPECT_THROW(parseSizes(bad), std::invalid_argument) << "'" << bad << "'";
     }
 }

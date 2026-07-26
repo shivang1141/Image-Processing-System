@@ -10,6 +10,9 @@ namespace imgproc {
 namespace {
 
 std::vector<std::string> splitList(const std::string& text, const std::string& what) {
+    if (!text.empty() && text.back() == ',') {
+        throw std::invalid_argument("Empty entry in " + what + " list: '" + text + "'");
+    }
     std::vector<std::string> items;
     std::stringstream ss(text);
     std::string item;
