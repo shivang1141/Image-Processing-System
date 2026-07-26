@@ -44,6 +44,7 @@ if(IMGPROC_BUILD_TESTS)
 
     add_executable(imgproc_tests
         tests/test_processor.cpp
+        tests/test_validation.cpp
         tests/test_batch.cpp
         tests/test_compare.cpp
         tests/test_parse.cpp
@@ -53,4 +54,22 @@ if(IMGPROC_BUILD_TESTS)
     include(GoogleTest)
     gtest_discover_tests(imgproc_tests DISCOVERY_TIMEOUT 60)
 
+    # End-to-end checks of the CLI's error handling: each must exit non-zero
+    # with a readable message instead of crashing.
+    function(add_cli_error_test name expected_regex)
+        string(REPLACE ";" "|" args "${ARGN}")
+        add_test(NAME cli.${name}
+            COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:imgproc> "-DARGS=${args}"
+                    "-DEXPECT=${expected_regex}"
+                    -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_expect_error.cmake)
+    endfunction()
+
+    add_cli_error_test(missing_file "File not found" process definitely_missing.png)
+    add_cli_error_test(missing_folder "Not a directory" batch definitely_missing_dir)
+    add_cli_error_test(unknown_command "Unknown command" frobnicate)
+    add_cli_error_test(unknown_option "Unknown option: --bogus" process x.png --bogus)
+    add_cli_error_test(bad_number "Invalid --iterations: 'ten'" bench --iterations ten)
+    add_cli_error_test(bad_size "Invalid height" bench --sizes 640x)
+    add_cli_error_test(bad_aperture "aperture must be 3, 5 or 7" process x.png --aperture 4)
+    add_cli_error_test(negative_threshold "thresholds must be >= 0" process x.png --low -5)
 endif()
