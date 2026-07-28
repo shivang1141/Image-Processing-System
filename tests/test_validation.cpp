@@ -63,6 +63,10 @@ struct InvalidImageCase {
     std::string bytes;
 };
 
+void PrintTo(const InvalidImageCase& c, std::ostream* os) {
+    *os << c.fileName << " (" << c.bytes.size() << " bytes)";
+}
+
 class InvalidImages : public ::testing::TestWithParam<InvalidImageCase> {};
 
 TEST_P(InvalidImages, LoadThrowsDecodeError) {
