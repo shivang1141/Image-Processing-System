@@ -23,7 +23,11 @@ add_library(imgproc_core
 )
 target_include_directories(imgproc_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(imgproc_core PUBLIC ${OpenCV_LIBS} Threads::Threads)
-target_compile_options(imgproc_core PRIVATE -Wall -Wextra -Wpedantic)
+if(MSVC)
+    target_compile_options(imgproc_core PRIVATE /W4)
+else()
+    target_compile_options(imgproc_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
 add_executable(imgproc src/main.cpp)
 target_link_libraries(imgproc PRIVATE imgproc_core)
